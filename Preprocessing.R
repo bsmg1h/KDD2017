@@ -282,3 +282,4 @@ rm(C_1_subset_1, C_1_subset_2, C_1_subset_3, C_1_subset_4, C_1_subset_5, C_1_sub
 # final part
 new_trajectories = rbind(B_3, B_1, A_2, A_3, C_3, C_1)
 rm(B_3, B_1, A_2, A_3, C_3, C_1)
+write.csv(new_trajectories, file = "links.csv", row.names = FALSE)
