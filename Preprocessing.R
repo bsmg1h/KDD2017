@@ -38,7 +38,7 @@ B_3_subset_5 = select(separate(trajectories_B_3, sequence_5,
                                             into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
                                    -sequence_1, -sequence_2, -sequence_3, -sequence_4)
 B_3 = rbind(B_3_subset_1, B_3_subset_2, B_3_subset_3, B_3_subset_4, B_3_subset_5)
-rm(B_3_subset_1, B_3_subset_2, B_3_subset_3, B_3_subset_4, B_3_subset_5)
+rm(B_3_subset_1, B_3_subset_2, B_3_subset_3, B_3_subset_4, B_3_subset_5, trajectories_B_3)
 # B_1
 trajectories_B_1 = select(filter(trajectories, intersection_id == 'B', tollgate_id == 1), -travel_time)
 trajectories_B_1 = separate(trajectories_B_1, travel_seq, 
@@ -84,7 +84,7 @@ B_1_subset_9 = select(separate(trajectories_B_1, sequence_9,
 B_1 = rbind(B_1_subset_1, B_1_subset_2, B_1_subset_3, B_1_subset_4, B_1_subset_5, 
             B_1_subset_6, B_1_subset_7, B_1_subset_8, B_1_subset_9)
 rm(B_1_subset_1, B_1_subset_2, B_1_subset_3, B_1_subset_4, B_1_subset_5, 
-   B_1_subset_6, B_1_subset_7, B_1_subset_8, B_1_subset_9)
+   B_1_subset_6, B_1_subset_7, B_1_subset_8, B_1_subset_9, trajectories_B_1)
 # filter(B_1, vehicle_id == 1086390) # to verify
 
 # A_2
@@ -112,35 +112,7 @@ A_2_subset_6 = select(separate(trajectories_A_2, sequence_6,
                                into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
                       -sequence_1, -sequence_2, -sequence_3, -sequence_4, -sequence_5)
 A_2 = rbind(A_2_subset_1, A_2_subset_2, A_2_subset_3, A_2_subset_4, A_2_subset_5, A_2_subset_6)
-rm(A_2_subset_1, A_2_subset_2, A_2_subset_3, A_2_subset_4, A_2_subset_5, A_2_subset_6)
-# filter(A_2, vehicle_id == 1071181) # to verify
-
-# A_2
-trajectories_A_2 = select(filter(trajectories, intersection_id == 'A', tollgate_id == 2), -travel_time)
-trajectories_A_2 = separate(trajectories_A_2, travel_seq, 
-                            into = c("sequence_1", "sequence_2", "sequence_3", "sequence_4", "sequence_5",
-                                     "sequence_6"),
-                            sep = ";")
-A_2_subset_1 = select(separate(trajectories_A_2, sequence_1, 
-                               into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
-                      -sequence_2, -sequence_3, -sequence_4, -sequence_5, -sequence_6)
-A_2_subset_2 = select(separate(trajectories_A_2, sequence_2, 
-                               into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
-                      -sequence_1, -sequence_3, -sequence_4, -sequence_5, -sequence_6)
-A_2_subset_3 = select(separate(trajectories_A_2, sequence_3, 
-                               into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
-                      -sequence_1, -sequence_2, -sequence_4, -sequence_5, -sequence_6)
-A_2_subset_4 = select(separate(trajectories_A_2, sequence_4, 
-                               into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
-                      -sequence_1, -sequence_2, -sequence_3, -sequence_5, -sequence_6)
-A_2_subset_5 = select(separate(trajectories_A_2, sequence_5, 
-                               into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
-                      -sequence_1, -sequence_2, -sequence_3, -sequence_4, -sequence_6)
-A_2_subset_6 = select(separate(trajectories_A_2, sequence_6, 
-                               into = c("link_id", "link_enter_time", "link_travel_time"),sep = "#"),
-                      -sequence_1, -sequence_2, -sequence_3, -sequence_4, -sequence_5)
-A_2 = rbind(A_2_subset_1, A_2_subset_2, A_2_subset_3, A_2_subset_4, A_2_subset_5, A_2_subset_6)
-rm(A_2_subset_1, A_2_subset_2, A_2_subset_3, A_2_subset_4, A_2_subset_5, A_2_subset_6)
+rm(A_2_subset_1, A_2_subset_2, A_2_subset_3, A_2_subset_4, A_2_subset_5, A_2_subset_6, trajectories_A_2)
 # filter(A_2, vehicle_id == 1071181) # to verify
 
 
@@ -176,7 +148,7 @@ A_3_subset_8 = select(separate(trajectories_A_3, sequence_8,
                       -sequence_1, -sequence_2, -sequence_3, -sequence_4, -sequence_5, -sequence_6, -sequence_7)
 
 A_3 = rbind(A_3_subset_1, A_3_subset_2, A_3_subset_3, A_3_subset_4, A_3_subset_5, A_3_subset_6, A_3_subset_7, A_3_subset_8)
-rm(A_3_subset_1, A_3_subset_2, A_3_subset_3, A_3_subset_4, A_3_subset_5, A_3_subset_6, A_3_subset_7, A_3_subset_8)
+rm(A_3_subset_1, A_3_subset_2, A_3_subset_3, A_3_subset_4, A_3_subset_5, A_3_subset_6, A_3_subset_7, A_3_subset_8, trajectories_A_3)
 # filter(A_3, vehicle_id == 1064408) # to verify
 
 
@@ -212,7 +184,7 @@ C_3_subset_8 = select(separate(trajectories_C_3, sequence_8,
                       -sequence_1, -sequence_2, -sequence_3, -sequence_4, -sequence_5, -sequence_6, -sequence_7)
 
 C_3 = rbind(C_3_subset_1, C_3_subset_2, C_3_subset_3, C_3_subset_4, C_3_subset_5, C_3_subset_6, C_3_subset_7, C_3_subset_8)
-rm(C_3_subset_1, C_3_subset_2, C_3_subset_3, C_3_subset_4, C_3_subset_5, C_3_subset_6, C_3_subset_7, C_3_subset_8)
+rm(C_3_subset_1, C_3_subset_2, C_3_subset_3, C_3_subset_4, C_3_subset_5, C_3_subset_6, C_3_subset_7, C_3_subset_8, trajectories_C_3)
 # filter(C_3, vehicle_id == 1072812) # to verify
 
 
@@ -275,11 +247,12 @@ C_1_subset_12 = select(separate(trajectories_C_1, sequence_12,
 C_1 = rbind(C_1_subset_1, C_1_subset_2, C_1_subset_3, C_1_subset_4, C_1_subset_5, C_1_subset_6, 
             C_1_subset_7, C_1_subset_8, C_1_subset_9, C_1_subset_10, C_1_subset_11, C_1_subset_12)
 rm(C_1_subset_1, C_1_subset_2, C_1_subset_3, C_1_subset_4, C_1_subset_5, C_1_subset_6, 
-  C_1_subset_7, C_1_subset_8, C_1_subset_9, C_1_subset_10, C_1_subset_11, C_1_subset_12)
+  C_1_subset_7, C_1_subset_8, C_1_subset_9, C_1_subset_10, C_1_subset_11, C_1_subset_12, trajectories_C_1)
 # filter(C_1, vehicle_id == 1056529) # to verify
 
 
 # final part
-new_trajectories = rbind(B_3, B_1, A_2, A_3, C_3, C_1)
+links = rbind(B_3, B_1, A_2, A_3, C_3, C_1)
+links = links[complete.cases(links),]
 rm(B_3, B_1, A_2, A_3, C_3, C_1)
-write.csv(new_trajectories, file = "links.csv", row.names = FALSE)
+write.csv(links, file = "links.csv", row.names = FALSE)
