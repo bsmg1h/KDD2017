@@ -260,7 +260,7 @@ preprocess <- function(trajectories) {
   # weekdays as character
   # date as Date
   
-  
+  links = mutate(links, link_id = as.numeric(link_id))
   links = mutate(links, link_travel_time = as.numeric(link_travel_time))
   # month, hour, weekday, working day for starting datas
   links = separate(links, starting_time, into = c("start_date", "start_time"), sep = " ")
@@ -305,24 +305,26 @@ convert_weekday <- function(char_weekday) {
   }
 }
 
-links = preprocess(trajectories)
 
-train_weather <- read.csv("weather (table 7)_training.csv")
+links = preprocess(trajectories)
+table3 <- read.csv("links (table 3).csv")
+train_weather <- read.csv("weather (table 7)_training_update.csv")
 test_weather <- read.csv("weather (table 7)_test1.csv")
-# weather_group <- function(start_hour) {
-#   # or use link_hour ? but we don't have anyways
-#   return(3*(start_hour%/%3))
-# }
-# mutate(links, weather_group = weather_group(start_hour))
-# mutate(links, weather_group = weather_group(start_hour)) %>% left_join(mutate(train_weather, date = as.Date(date)), by = c("start_date" = "date", "weather_group" = "hour"))
 
 join_weather <- function(links, weather) {
   links = mutate(links, weather_group = 3*(start_hour%/%3))
   weather = mutate(weather, date = as.Date(date))
   links = left_join(links, weather, by = c("start_date" = "date", "weather_group" = "hour"))
+  links = select(links, -weather_group)
+  return(links)
+}
+
+join_link_information <- function(links, link_information) {
+  link_information = link_information %>% select(link_id, length, width)
+  links = left_join(links, link_information, by = c("link_id" = "link_id"))
   return(links)
 }
 
 links = join_weather(links, train_weather)
-
-write.csv(preprocess(trajectories), file = "links.csv", row.names = FALSE)
+links = join_link_information(links, table3)
+write.csv(links, file = "links.csv", row.names = FALSE)
