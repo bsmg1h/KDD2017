@@ -304,7 +304,25 @@ convert_weekday <- function(char_weekday) {
     return(7)
   }
 }
+
 links = preprocess(trajectories)
 
+train_weather <- read.csv("weather (table 7)_training.csv")
+test_weather <- read.csv("weather (table 7)_test1.csv")
+# weather_group <- function(start_hour) {
+#   # or use link_hour ? but we don't have anyways
+#   return(3*(start_hour%/%3))
+# }
+# mutate(links, weather_group = weather_group(start_hour))
+# mutate(links, weather_group = weather_group(start_hour)) %>% left_join(mutate(train_weather, date = as.Date(date)), by = c("start_date" = "date", "weather_group" = "hour"))
 
-# write.csv(preprocess(trajectories), file = "links.csv", row.names = FALSE)
+join_weather <- function(links, weather) {
+  links = mutate(links, weather_group = 3*(start_hour%/%3))
+  weather = mutate(weather, date = as.Date(date))
+  links = left_join(links, weather, by = c("start_date" = "date", "weather_group" = "hour"))
+  return(links)
+}
+
+links = join_weather(links, train_weather)
+
+write.csv(preprocess(trajectories), file = "links.csv", row.names = FALSE)
