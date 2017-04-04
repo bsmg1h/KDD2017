@@ -7,8 +7,13 @@ library(ggplot2)
 # library(chron)
 setwd("/Users/LL/Documents/HKUST/KDD/R code")
 
-
-trajectories <- read.csv("trajectories(table 5)_training.csv")
+table3 <- read.csv("links (table 3).csv")
+# train data
+train_trajectories <- read.csv("trajectories(table 5)_training.csv")
+train_weather <- read.csv("weather (table 7)_training_update.csv")
+# test data
+test_trajectories = read.csv("trajectories(table 5)_test1.csv")
+test_weather <- read.csv("weather (table 7)_test1.csv")
 
 preprocess <- function(trajectories) {
   
@@ -305,12 +310,6 @@ convert_weekday <- function(char_weekday) {
   }
 }
 
-
-links = preprocess(trajectories)
-table3 <- read.csv("links (table 3).csv")
-train_weather <- read.csv("weather (table 7)_training_update.csv")
-test_weather <- read.csv("weather (table 7)_test1.csv")
-
 join_weather <- function(links, weather) {
   links = mutate(links, weather_group = 3*(start_hour%/%3))
   weather = mutate(weather, date = as.Date(date))
@@ -325,6 +324,14 @@ join_link_information <- function(links, link_information) {
   return(links)
 }
 
-links = join_weather(links, train_weather)
-links = join_link_information(links, table3)
-write.csv(links, file = "links.csv", row.names = FALSE)
+# complete information about :
+# 'trajectories(table 5)_training.csv' x 'weather (table 7)_training_update.csv' x 'links (table 3).csv'
+train_links = preprocess(train_trajectories) %>% join_weather(train_weather) %>% join_link_information(table3)
+# complete information about : 
+# 'trajectories(table 5)_test1.csv' x 'weather (table 7)_test1.csv' x 'links (table 3).csv'
+test_links = preprocess(test_trajectories) %>% join_weather(test_weather) %>% join_link_information(table3)
+
+
+# output file
+write.csv(train_links, file = "links_with_weather.csv", row.names = FALSE)
+write.csv(test_links, file = "test_links_with_weather.csv", row.names = FALSE)
