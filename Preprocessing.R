@@ -292,6 +292,7 @@ preprocess <- function(trajectories) {
   return(links)
 }
 
+# Monday is 1, Sunday is 7
 convert_weekday <- function(char_weekday) {
   if (char_weekday == "Monday") {
     return(1)
@@ -326,12 +327,28 @@ join_link_information <- function(links, link_information) {
 
 # complete information about :
 # 'trajectories(table 5)_training.csv' x 'weather (table 7)_training_update.csv' x 'links (table 3).csv'
-train_links = preprocess(train_trajectories) %>% join_weather(train_weather) %>% join_link_information(table3)
+train_links = preprocess(train_trajectories) %>% 
+  join_weather(train_weather) %>% join_link_information(table3)
 # complete information about : 
 # 'trajectories(table 5)_test1.csv' x 'weather (table 7)_test1.csv' x 'links (table 3).csv'
-test_links = preprocess(test_trajectories) %>% join_weather(test_weather) %>% join_link_information(table3)
+test_links = preprocess(test_trajectories) %>% 
+  join_weather(test_weather) %>% join_link_information(table3)
 
+ml_model <- function(trajectories, link_information, weather) {
+  # build matrix ready to be used
+  return(preprocess(trajectories) %>% 
+           group_by(link_id, weekday, start_date, day_time_group) %>% 
+           summarise(Mean = mean(link_travel_time), start_hour = mean(start_hour)) %>%
+           join_link_information(link_information) %>%
+           join_weather(weather))
+  # start_hour and start_date needs to be deleted later, doesn't work here
+}
+
+train_model = ml_model(train_trajectories, table3, train_weather)
+test_model = ml_model(test_trajectories, table3, test_weather)
 
 # output file
 write.csv(train_links, file = "links_with_weather.csv", row.names = FALSE)
 write.csv(test_links, file = "test_links_with_weather.csv", row.names = FALSE)
+write.csv(train_model, file = "train_model.csv", row.names = FALSE)
+write.csv(test_model, file = "test_model.csv", row.names = FALSE)
