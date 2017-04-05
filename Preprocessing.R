@@ -338,7 +338,7 @@ ml_model <- function(trajectories, link_information, weather) {
   # build matrix ready to be used
   return(preprocess(trajectories) %>% 
            group_by(link_id, weekday, start_date, day_time_group) %>% 
-           summarise(Mean = mean(link_travel_time), start_hour = mean(start_hour)) %>%
+           summarise(mean_travel_time = mean(link_travel_time), start_hour = mean(start_hour)) %>%
            join_link_information(link_information) %>%
            join_weather(weather))
   # start_hour and start_date needs to be deleted later, doesn't work here
