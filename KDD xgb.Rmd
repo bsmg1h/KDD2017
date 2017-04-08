@@ -1,0 +1,54 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(dplyr)
+library(tidyr)
+library(xgboost)
+set.seed(1)
+setwd("/Users/LL/Documents/HKUST/KDD/R code")
+
+train_model = read.csv("train_model.csv")
+train_model[!complete.cases(train_model),] %>% distinct(start_date) # days where weather data is incomplete
+train_model = train_model[complete.cases(train_model),] %>% select(-start_date, -start_hour) # remove NAs
+
+# train_model = train_model %>% mutate(link_id = as.factor(link_id)) 
+# don't use for xgboost otherwise can't build xgb.DMatrix
+
+# as.matrix converts the num/int/chr/factor typing so this is only used for xgboost input
+X_train = train_model %>% select(-mean_travel_time) %>% as.matrix()
+y_train = train_model$mean_travel_time
+
+test_model = read.csv("test_model.csv")
+X_test = test_model %>% select(-time_window, -start_date, -intersection_id, -tollgate_id) %>% as.matrix()
+```
+# Xgboost training part
+```{r}
+dtrain = xgb.DMatrix(X_train, label = y_train)
+
+MAPE <- function(preds, dtrain){
+    # custom loss function : Mean Absolute Percentage Error, the evaluation criteria
+    # https://gist.github.com/aakansh9/eee83f333f5f3d128ab392cf0b0383ef
+    labels <- getinfo(dtrain, 'label')
+    err <- sum(abs((as.numeric(labels) - as.numeric(preds))/as.numeric(labels)))
+    err <- err/length(labels)
+    return(list(metric='MAPE', value=err))
+}
+
+model = xgboost(data = X_train, label = y_train, nrounds = 50, max_depth = 15, subsample = 0.9,
+                objective = "reg:linear", eval_metric = MAPE)
+
+PREDICT = cbind(test_model, avg_travel_time = round(predict(model, X_test), 2))
+result = as.data.frame(PREDICT) %>% select(intersection_id, tollgate_id, time_window, avg_travel_time)
+
+# Problem : now the results for the a same hour is the same
+
+write.csv(result, file = "submission_xgb1.csv", row.names = FALSE, quote = 3)
+
+# model2 = xgboost(data = X_train, label = y_train, nrounds = 500, max_depth = 15, subsample = 0.9,
+#                 objective = "reg:linear", eval_metric = MAPE)
+# PREDICT = cbind(test_model, avg_travel_time = round(predict(model2, X_test), 2))
+# result = as.data.frame(PREDICT) %>% select(intersection_id, tollgate_id, time_window, avg_travel_time)
+
+```
