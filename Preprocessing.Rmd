@@ -1,20 +1,30 @@
-# install.packages("dplyr")
-# install.packages("tidyr")
-# install.packages("chron")
+---
+title: "Preprocessing"
+output: html_document
+---
+```{r}
 library(dplyr)
 library(tidyr)
 library(ggplot2)
-# library(chron)
+set.seed(1)
 setwd("/Users/LL/Documents/HKUST/KDD/R code")
 
-table3 <- read.csv("links (table 3).csv")
 # train data
 train_trajectories <- read.csv("trajectories(table 5)_training.csv")
 train_weather <- read.csv("weather (table 7)_training_update.csv")
 # test data
 test_trajectories = read.csv("trajectories(table 5)_test1.csv")
 test_weather <- read.csv("weather (table 7)_test1.csv")
+```
+# Normalizing datas from table 3
+```{r}
+table3 <- read.csv("links (table 3).csv")
+width_max = max(table3$width)
+length_max = max(table3$length)
+table3 = table3 %>% mutate(width = width/width_max, length = length/length_max)
+```
 
+```{r}
 preprocess <- function(trajectories) {
   
   # Part 1 : create data.frame centered on datas of each link
@@ -276,7 +286,7 @@ preprocess <- function(trajectories) {
   links = mutate(links, start_hour = as.numeric(start_hour))
   links = mutate(links, start_minute = as.numeric(start_minute))
   links = mutate(links, start_second = as.numeric(start_second))
-  # create time bin
+  # create time bin : starts at 1, ends at 72
   links = mutate(links, day_time_group = 1 + start_hour*3 + start_minute%/%20 )
   
   # month, hour, weekday, working day for link entering datas
@@ -310,6 +320,21 @@ convert_weekday <- function(char_weekday) {
     return(7)
   }
 }
+```
+
+```{r}
+# links = fread("links_with_weather.csv")
+# history_average_by_all = links %>%
+#   group_by(link_id, weekday, day_time_group) %>%
+#   summarise(history_average = mean(link_travel_time))
+```
+
+```{r}
+join_link_information <- function(links, link_information) {
+  link_information = link_information %>% select(link_id, length, width)
+  links = left_join(links, link_information, by = c("link_id" = "link_id"))
+  return(links)
+}
 
 join_weather <- function(links, weather) {
   links = mutate(links, weather_group = 3*(start_hour%/%3))
@@ -318,37 +343,183 @@ join_weather <- function(links, weather) {
   links = select(links, -weather_group)
   return(links)
 }
-
-join_link_information <- function(links, link_information) {
-  link_information = link_information %>% select(link_id, length, width)
-  links = left_join(links, link_information, by = c("link_id" = "link_id"))
-  return(links)
-}
-
 # complete information about :
 # 'trajectories(table 5)_training.csv' x 'weather (table 7)_training_update.csv' x 'links (table 3).csv'
-train_links = preprocess(train_trajectories) %>% 
-  join_weather(train_weather) %>% join_link_information(table3)
+# train_links = preprocess(train_trajectories) %>% 
+#   join_weather(train_weather) %>% join_link_information(table3)
 # complete information about : 
 # 'trajectories(table 5)_test1.csv' x 'weather (table 7)_test1.csv' x 'links (table 3).csv'
-test_links = preprocess(test_trajectories) %>% 
-  join_weather(test_weather) %>% join_link_information(table3)
+# test_links = preprocess(test_trajectories) %>%
+#   join_weather(test_weather) %>% join_link_information(table3)
+train_links = rbind(preprocess(train_trajectories) %>% join_weather(train_weather) %>% join_link_information(table3),
+                    preprocess(test_trajectories) %>% join_weather(test_weather) %>% join_link_information(table3))
+
+historical_mean <- function(links) {
+  return(links %>%
+    group_by(link_id, weekday, day_time_group) %>%
+    summarise(history_average = mean(link_travel_time)))
+}
 
 ml_model <- function(trajectories, link_information, weather) {
   # build matrix ready to be used
+  # with mean_travel_time at each day_time_group of each start_date
   return(preprocess(trajectories) %>% 
            group_by(link_id, weekday, start_date, day_time_group) %>% 
            summarise(mean_travel_time = mean(link_travel_time), start_hour = mean(start_hour)) %>%
+           # start_hour = mean(start_hour) is to in order to have start_hour, will be used for join_weather
            join_link_information(link_information) %>%
            join_weather(weather))
   # start_hour and start_date needs to be deleted later, doesn't work here
 }
 
-train_model = ml_model(train_trajectories, table3, train_weather)
-test_model = ml_model(test_trajectories, table3, test_weather)
+# train_model = ml_model(train_trajectories, table3, train_weather) 
+train_model = rbind(ml_model(train_trajectories, table3, train_weather), ml_model(test_trajectories, table3, test_weather))
 
-# output file
+# join historical mean of each link on each day_time_group for each weekday
+mean_data = historical_mean(train_links)
+train_model = train_model %>% 
+  left_join(mean_data, 
+            by = c("link_id" = "link_id", "weekday" = "weekday", "day_time_group" = "day_time_group"))
+
+# add the difference between the link_travel_time with the historical mean of the given day_time_group on weekday
+# as y
+train_model = train_model %>% mutate(y = history_average - mean_travel_time)
+
+# add the difference from mean travel time data of previous 2 hours (= 6 day_time_group) for the following 6 d_t_g
+# which are : "y_1", "y_2", "y_3", "y_4", "y_5", "y_6"
+
+mutate_date <- function(start_date, day_time_group) {
+  if (day_time_group >= 7) {
+    return(start_date)
+  } else {
+    return(start_date-1)
+    # we should look at previous day
+  }
+}
+
+mutate_y <- function(start_date, day_time_group) {
+  if (day_time_group >= 7) {
+    return(((day_time_group-1)%/%6)*6)
+    # for 6 returns 0, for 7 returns 1
+  } else {
+    return(72)
+    # last day_time_group of previous day
+  }
+}
+
+y_data = train_model %>% ungroup %>% select(link_id, start_date, day_time_group, y) %>% mutate(y_1 = y) %>% select(-y)
+add_previous_y <- function(train_model, y_data) {
+  train_model %>% 
+    mutate(previous_date = as.Date(mapply(mutate_date, start_date, day_time_group), origin = "1970-01-01"),
+           previous_dtg_1 = mapply(mutate_y, start_date, day_time_group),
+           previous_dtg_2 = mapply(mutate_y, start_date, day_time_group)-1,
+           previous_dtg_3 = mapply(mutate_y, start_date, day_time_group)-2,
+           previous_dtg_4 = mapply(mutate_y, start_date, day_time_group)-3,
+           previous_dtg_5 = mapply(mutate_y, start_date, day_time_group)-4,
+           previous_dtg_6 = mapply(mutate_y, start_date, day_time_group)-5) %>%
+    left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    select(-previous_dtg_1, -previous_dtg_2, -previous_dtg_3, -previous_dtg_4, -previous_dtg_5, -previous_dtg_6) %>%
+    select(-previous_date) -> result
+  colnames(result)[(ncol(result)-5):ncol(result)] <- c("y_1", "y_2", "y_3", "y_4", "y_5", "y_6")
+  return(result)
+}
+train_model = add_previous_y(train_model, y_data)
+# for the test days the data of "y_1", "y_2", "y_3", "y_4", "y_5", "y_6" are incomplete
+# for train dates start on 2016-07-19 ends on 2016-10-17, test dates are from 2016-10-18 ends on 2016-10-24
+```
+# Construct test_model and X_test
+```{r}
+test_weather <- read.csv("weather (table 7)_test1.csv")
+test_model = read.csv("submission_sample_travelTime.csv") %>% select(-avg_travel_time) # take out sample travel time
+
+create_links <- function(intersection_id, tollgate_id) {
+  chosen_path = paste(intersection_id, tollgate_id, sep = "")
+  if (chosen_path == "C1") {
+    path_links = "115, 102, 109, 104, 112, 111, 103, 116, 101, 121, 106, 113"
+  } else if (chosen_path == "C3") {
+    path_links = "115, 102, 109, 104, 112, 111, 103, 122"
+  } else if (chosen_path == "B1") {
+    path_links = "105, 100, 111, 103, 116, 101, 121, 106, 113"
+  } else if (chosen_path == "B3") {
+    path_links = "105, 100, 111, 103, 122"
+  } else if (chosen_path == "A3") {
+    path_links = "110, 123, 107, 108, 119, 114, 118, 122"
+  } else if (chosen_path == "A2") {
+    path_links = "110, 123, 107, 108, 120, 117"
+  } 
+  return(path_links)
+}
+
+test_model =
+  test_model %>% separate(time_window, into = c("temp", "start_date"), sep = '\\[', remove = FALSE) %>% 
+  separate(start_date, into = c("start_date", "end_date"), sep = ',') %>%
+  separate(start_date, into = c("start_date", "start_time"), sep = ' ') %>%
+  separate(start_time, into = c("start_hour", "start_minute", "start_second"), sep = ':') %>%
+  mutate(start_date = as.Date(start_date), start_hour = as.numeric(start_hour), start_minute = as.numeric(start_minute)) %>%
+  mutate(day_time_group = 1 + start_hour*3 + start_minute%/%20 ) %>%
+  join_weather(test_weather) %>%
+  select(-temp, -end_date, -start_second) %>%
+  mutate(path = paste(intersection_id, tollgate_id, sep = "")) %>%
+  mutate(links = mapply(create_links, intersection_id, tollgate_id))
+
+create_subset <- function(test_model, intersection, tollgate) {
+  chosen_path = paste(intersection, tollgate, sep = "")
+  if (chosen_path == "C1") {
+    path_length = 12
+  } else if (chosen_path == "C3") {
+    path_length = 8
+  } else if (chosen_path == "B1") {
+    path_length = 9
+  } else if (chosen_path == "B3") {
+    path_length = 5
+  } else if (chosen_path == "A3") {
+    path_length = 8
+  } else if (chosen_path == "A2") {
+    path_length = 6
+  }
+  sequence_list = c()
+  for (i in 1:path_length) {
+    sequence_list = c(sequence_list, paste("sequence_", i, sep = ""))
+  }
+  test_model = test_model %>% filter(intersection_id == intersection, tollgate_id == tollgate) %>%
+    separate(links, into = sequence_list, sep = ",")
+  test_model = test_model %>% gather(sequence, link_id, (ncol(test_model)-path_length+1):ncol(test_model))
+}
+
+subsetA2 = create_subset(test_model, intersection = "A", tollgate = 2)
+subsetA3 = create_subset(test_model, intersection = "A", tollgate = 3)
+subsetB1 = create_subset(test_model, intersection = "B", tollgate = 1)
+subsetB3 = create_subset(test_model, intersection = "B", tollgate = 3)
+subsetC1 = create_subset(test_model, intersection = "C", tollgate = 1)
+subsetC3 = create_subset(test_model, intersection = "C", tollgate = 3)
+
+test_model = rbind(subsetA2, subsetA3, subsetB1, subsetB3, subsetC1, subsetC3) %>% 
+  select(-start_hour, -start_minute, -path, -sequence) %>%
+  mutate(link_id = as.numeric(link_id)) %>%
+  join_link_information(table3) %>%
+  mutate(weekday = weekdays(start_date)) %>%
+  mutate(weekday = as.numeric(sapply(weekday, convert_weekday)))
+rm(subsetA2, subsetA3, subsetB1, subsetB3, subsetC1, subsetC3)
+# add historical mean travel time
+test_model = test_model %>% 
+  left_join(mean_data, 
+            by = c("link_id" = "link_id", "weekday" = "weekday", "day_time_group" = "day_time_group"))
+
+# add the mean travel time data of previous 2 hours (= 6 day_time_group) for the following 6 d_t_g
+# which are : "y_1", "y_2", "y_3", "y_4", "y_5", "y_6"
+test_model = add_previous_y(test_model, y_data)
+```
+# Ouput
+```{r}
+# output files
 write.csv(train_links, file = "links_with_weather.csv", row.names = FALSE)
-write.csv(test_links, file = "test_links_with_weather.csv", row.names = FALSE)
+# write.csv(test_links, file = "test_links_with_weather.csv", row.names = FALSE)
 write.csv(train_model, file = "train_model.csv", row.names = FALSE)
+# write.csv(test_model, file = "test_model.csv", row.names = FALSE)
 write.csv(test_model, file = "test_model.csv", row.names = FALSE)
+```
