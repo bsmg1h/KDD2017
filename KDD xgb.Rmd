@@ -10,22 +10,61 @@ set.seed(1)
 setwd("/Users/LL/Documents/HKUST/KDD/R code")
 
 train_model = read.csv("train_model.csv")
-train_model[!complete.cases(train_model),] %>% distinct(start_date) # days where weather data is incomplete
-train_model = train_model[complete.cases(train_model),] %>% select(-start_date, -start_hour) # remove NAs
+# train_model[!complete.cases(train_model),] %>% distinct(start_date) # days where weather data is incomplete
+# train_model = train_model[complete.cases(train_model),] %>% select(-start_date, -start_hour) # remove NAs
 
 # train_model = train_model %>% mutate(link_id = as.factor(link_id)) 
 # don't use for xgboost otherwise can't build xgb.DMatrix
 
 # as.matrix converts the num/int/chr/factor typing so this is only used for xgboost input
-X_train = train_model %>% select(-mean_travel_time) %>% as.matrix()
+X_train = train_model %>% select(-start_date, - start_hour, -mean_travel_time, -link_id,
+                                 -wind_direction, -wind_speed, -pressure, -sea_pressure, -temperature, 
+                                 -y, -day_time_group, -weekday,
+                                 -y_1, -y_2, -y_3, -y_4, -y_5, -y_6) %>% as.matrix()
 y_train = train_model$mean_travel_time
 
 test_model = read.csv("test_model.csv")
-X_test = test_model %>% select(-time_window, -start_date, -intersection_id, -tollgate_id) %>% as.matrix()
+X_test = test_model %>% select(-time_window, -start_date, -intersection_id, -tollgate_id,
+                               -wind_direction, -wind_speed, -pressure, -sea_pressure, -temperature,
+                               -day_time_group, -weekday, -link_id,
+                                -y_1, -y_2, -y_3, -y_4, -y_5, -y_6) %>% as.matrix()
 ```
 # Xgboost training part
 ```{r}
-dtrain = xgb.DMatrix(X_train, label = y_train)
+dtrain = xgb.DMatrix(X_train, label = y_train, missing = NA)
+
+MAPE <- function(preds, dtrain){
+    # custom loss function : Mean Absolute Percentage Error, the evaluation criteria
+    # https://gist.github.com/aakansh9/eee83f333f5f3d128ab392cf0b0383ef
+    labels <- getinfo(dtrain, 'label')
+    err <- sum(abs((as.numeric(labels) - as.numeric(preds)))/(as.numeric(labels)*length(labels)))
+    # err <- err/length(labels)
+    return(list(metric='MAPE', value=err))
+    # Problem with calculating MAPE : outputs Inf+NaN because we devide by y which is << 0
+}
+
+model = xgb.cv(data = X_train, label = y_train, nrounds = 150, nfold = 6, max_depth = 5, subsample = 1, eta = 0.03, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+# fix NA issue with MAPE or try MAE using latest version of xgboost
+
+model = xgboost(data = X_train, label = y_train, nrounds = 50, max_depth = 5, subsample = 1, eta = 0.03, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+
+PREDICT = cbind(test_model, avg_travel_time = predict(model, X_test, missing = NA))
+# PREDICT = PREDICT %>% mutate(avg_travel_time = history_average - y)
+# we defined y as : y = history_average - mean_travel_time
+# now the prediction is y, w
+result = as.data.frame(PREDICT) %>% select(intersection_id, tollgate_id, time_window, avg_travel_time)
+write.csv(result, file = "submission_xgb4.csv", row.names = FALSE, quote = 3)
+```
+
+```{r}
+# no need to standardise or normalize :  
+# https://github.com/dmlc/xgboost/issues/357
+# https://www.kaggle.com/c/springleaf-marketing-response/discussion/16316
+dtrain = xgb.DMatrix(X_train, label = y_train, missing = NA)
 
 MAPE <- function(preds, dtrain){
     # custom loss function : Mean Absolute Percentage Error, the evaluation criteria
@@ -36,19 +75,41 @@ MAPE <- function(preds, dtrain){
     return(list(metric='MAPE', value=err))
 }
 
-model = xgboost(data = X_train, label = y_train, nrounds = 50, max_depth = 15, subsample = 0.9,
-                objective = "reg:linear", eval_metric = MAPE)
+model = xgb.cv(data = X_train, label = y_train, nrounds = 50, nfold = 6, max_depth = 6, subsample = 0.9, eta = 0.3, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear") #, 
+               # eval_metric = "mae")
+# fix NA issue with MAPE
 
-PREDICT = cbind(test_model, avg_travel_time = round(predict(model, X_test), 2))
+# train-MAPE:0.366127+0.003452	test-MAPE:0.384825+0.010569
+# xgb.importance(model) %>% xgb.plot.importance()
+# xgb.cv helps selecting best parameters : https://github.com/dmlc/xgboost/issues/92
+
+model = xgboost(data = X_train, label = y_train, nrounds = 50, max_depth = 15, subsample = 0.9, eta = 0.3, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, objective = "reg:linear", eval_metric = MAPE)
+# train-MAPE:0.163478072449328
+predict(model, X_test)
+PREDICT = cbind(test_model, avg_travel_time = predict(model, X_test))
 result = as.data.frame(PREDICT) %>% select(intersection_id, tollgate_id, time_window, avg_travel_time)
 
-# Problem : now the results for the a same hour is the same
 
-write.csv(result, file = "submission_xgb1.csv", row.names = FALSE, quote = 3)
-
-# model2 = xgboost(data = X_train, label = y_train, nrounds = 500, max_depth = 15, subsample = 0.9,
-#                 objective = "reg:linear", eval_metric = MAPE)
-# PREDICT = cbind(test_model, avg_travel_time = round(predict(model2, X_test), 2))
-# result = as.data.frame(PREDICT) %>% select(intersection_id, tollgate_id, time_window, avg_travel_time)
-
+model1 = xgb.cv(data = X_train, label = y_train, nrounds = 200, nfold = 10, max_depth = 15, subsample = 0.9, eta = 0.3, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, objective = "reg:linear", eval_metric = MAPE)
+# TODO : early stopping
+# find best parameter after cv
+# https://discuss.analyticsvidhya.com/t/error-in-xgboost-cross-and-validation-prediction-output-in-r/7333/5
 ```
+```{r}
+# plot(1:200,
+#      model$train.MAPE.mean)
+# str(model)
+# model %>% 
+#   mutate() %>% # create column 
+#   gather(test1,test2, train.MAPE.mean, test.MAPE.mean) %>% 
+#   select(-test.MAPE.std, -train.MAPE.std)
+```
+
+
+```{r}
+write.csv(result, file = "submission_xgb3.csv", row.names = FALSE, quote = 3)
+```
+
