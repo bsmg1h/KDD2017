@@ -1,0 +1,847 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(xgboost)
+library(data.table)
+library(dtplyr)
+
+set.seed(1)
+setwd("/Users/LL/Documents/HKUST/KDD/R code")
+
+MAPE <- function(preds, dtrain){
+    # custom loss function : Mean Absolute Percentage Error, the evaluation criteria
+    # https://gist.github.com/aakansh9/eee83f333f5f3d128ab392cf0b0383ef
+    labels <- getinfo(dtrain, 'label')
+    err <- sum(abs((as.numeric(labels) - as.numeric(preds)))/(as.numeric(labels)*length(labels)))
+    # err <- err/length(labels)
+    return(list(metric='MAPE', value=err))
+    # Problem with calculating MAPE : outputs Inf+NaN because we devide by y which is << 0
+}
+
+train_model = fread("train_model.csv")
+# train_model[!complete.cases(train_model),] %>% distinct(start_date) # days where weather data is incomplete
+# train_model = train_model[complete.cases(train_model),] %>% select(-start_date, -start_hour) # remove NAs
+
+# train_model = train_model %>% mutate(link_id = as.factor(link_id)) 
+# don't use for xgboost otherwise can't build xgb.DMatrix
+
+# as.matrix converts the num/int/chr/factor typing so this is only used for xgboost input
+X_train = train_model %>% select(-start_date, - start_hour, -link_id,
+                                 -wind_direction, -wind_speed, -pressure, -sea_pressure, -temperature, 
+                                 -y, -day_time_group, -weekday,
+                                 # -y_1, -y_2, -y_3, -y_4, -y_5, -y_6,
+                                 -mean_travel_time) %>% as.matrix()
+X_train = train_model %>% select(length, width, rel_humidity, precipitation, history_average, 
+                                 mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6) %>% as.matrix()
+X_train = train_model %>% select(length, width, rel_humidity, precipitation, history_average, 
+                                 mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+                                 link_id, day_time_group, weekday) %>% as.matrix()
+y_train = train_model$mean_travel_time
+
+test_model = fread("test_model.csv")
+X_test = test_model %>% select(-time_window, -start_date, -intersection_id, -tollgate_id,
+                               -wind_direction, -wind_speed, -pressure, -sea_pressure, -temperature,
+                               # -y_1, -y_2, -y_3, -y_4, -y_5, -y_6,
+                               -day_time_group, -weekday, -link_id) %>% as.matrix()
+X_test = test_model %>% select(length, width, rel_humidity, precipitation, history_average, 
+                               mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+                               link_id, day_time_group, weekday) %>% as.matrix()
+```
+
+## link 100
+```{r}
+train_model_100 = train_model %>% filter(link_id %in% c(100))
+X_train_100 = train_model_100 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_100 = train_model_100$mean_travel_time
+X_test_100 = test_model %>% filter(link_id %in% c(100)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_100, label = y_train_100, nrounds = 500, nfold = 6, max_depth = 5, subsample = 1, 
+                  eta = 0.007, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, 
+                  objective = "reg:linear", 
+                  eval_metric = MAPE) # [265]	train-MAPE:0.208834+0.002367	test-MAPE:0.235832+0.016667 
+cv_model = xgb.cv(data = X_train_100, label = y_train_100, nrounds = 500, nfold = 6, max_depth = 7, subsample = 1, 
+                  eta = 0.007, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, 
+                  objective = "reg:linear", 
+                  eval_metric = MAPE) # [280]	train-MAPE:0.190648+0.001700	test-MAPE:0.233037+0.010621 
+
+model = xgboost(data = X_train_100, label = y_train_100, nrounds = 280, max_depth = 7, subsample = 1, eta = 0.007, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_100), model = model)
+
+avg_travel_time_100 = predict(model, X_test_100, missing = NA) # assign
+
+y_test_100 = cbind(X_test_100, avg_travel_time_100) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_100)
+y_test_100 = test_model %>% ungroup %>% left_join(y_test_100, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_100) 
+
+```
+## link 101
+```{r}
+train_model_101 = train_model %>% filter(link_id %in% c(101))
+X_train_101 = train_model_101 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_101 = train_model_101$mean_travel_time
+X_test_101 = test_model %>% filter(link_id %in% c(101)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_101, label = y_train_101, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1, 
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+                  eval_metric = MAPE) # [162]	train-MAPE:0.232322+0.001760	test-MAPE:0.257290+0.007653 
+
+cv_model = xgb.cv(data = X_train_101, label = y_train_101, nrounds = 350, nfold = 6, max_depth = 7, subsample = 1, 
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+                  eval_metric = MAPE) # [167]	train-MAPE:0.209895+0.002155	test-MAPE:0.260207+0.008069 
+
+
+model = xgboost(data = X_train_101, label = y_train_101, nrounds = 162, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_101), model = model)
+
+avg_travel_time_101 = predict(model, X_test_101, missing = NA) # assign
+
+y_test_101 = cbind(X_test_101, avg_travel_time_101) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_101)
+y_test_101 = test_model %>% ungroup %>% left_join(y_test_101, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_101) 
+
+```
+## link 102
+```{r}
+train_model_102 = train_model %>% filter(link_id %in% c(102))
+X_train_102 = train_model_102 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_102 = train_model_102$mean_travel_time
+X_test_102 = test_model %>% filter(link_id %in% c(102)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_102, label = y_train_102, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1, 
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+                  eval_metric = MAPE) # [231]	train-MAPE:0.155223+0.001590	test-MAPE:0.173770+0.018340
+
+model = xgboost(data = X_train_102, label = y_train_102, nrounds = 240, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_102), model = model)
+
+avg_travel_time_102 = predict(model, X_test_102, missing = NA) # assign
+
+y_test_102 = cbind(X_test_102, avg_travel_time_102) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_102)
+y_test_102 = test_model %>% ungroup %>% left_join(y_test_102, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_102) 
+```
+
+## link 103 : 0.52
+```{r}
+train_model_103 = train_model %>% filter(link_id %in% c(103))
+X_train_103 = train_model_103 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_103 = train_model_103$mean_travel_time
+X_test_103 = test_model %>% filter(link_id %in% c(103)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_103, label = y_train_103, nrounds = 1000, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.001, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [483]	train-MAPE:0.501926+0.003966	test-MAPE:0.524005+0.017239 
+cv_model = xgb.cv(data = X_train_103, label = y_train_103, nrounds = 2000, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.0001, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [483]	train-MAPE:0.501926+0.003966	test-MAPE:0.524005+0.017239 
+
+model = xgboost(data = X_train_103, label = y_train_103, nrounds = 483, max_depth = 5, subsample = 1, eta = 0.001, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_103), model = model)
+
+avg_travel_time_103 = predict(model, X_test_103, missing = NA) # assign
+
+y_test_103 = cbind(X_test_103, avg_travel_time_103) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_103)
+y_test_103 = test_model %>% ungroup %>% left_join(y_test_103, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_103) 
+```
+
+## link 104
+```{r}
+train_model_104 = train_model %>% filter(link_id %in% c(104))
+X_train_104 = train_model_104 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_104 = train_model_104$mean_travel_time
+X_test_104 = test_model %>% filter(link_id %in% c(104)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_104, label = y_train_104, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [213]	train-MAPE:0.176684+0.001497	test-MAPE:0.196414+0.008877 
+
+model = xgboost(data = X_train_104, label = y_train_104, nrounds = 213, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+# xgb.importance(feature_names = colnames(X_train_104), model = model)
+
+avg_travel_time_104 = predict(model, X_test_104, missing = NA) # assign
+
+y_test_104 = cbind(X_test_104, avg_travel_time_104) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_104)
+y_test_104 = test_model %>% ungroup %>% left_join(y_test_104, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_104) 
+```
+
+## link 105
+```{r}
+train_model_105 = train_model %>% filter(link_id %in% c(105))
+X_train_105 = train_model_105 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_105 = train_model_105$mean_travel_time
+X_test_105 = test_model %>% filter(link_id %in% c(105)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_105, label = y_train_105, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [168]	train-MAPE:0.253431+0.002179	test-MAPE:0.270846+0.008117 
+
+model = xgboost(data = X_train_105, label = y_train_105, nrounds = 168, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+# xgb.importance(feature_names = colnames(X_train_105), model = model)
+
+avg_travel_time_105 = predict(model, X_test_105, missing = NA) # assign
+
+y_test_105 = cbind(X_test_105, avg_travel_time_105) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_105)
+y_test_105 = test_model %>% ungroup %>% left_join(y_test_105, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_105) 
+```
+## link 106
+```{r}
+train_model_106 = train_model %>% filter(link_id %in% c(106))
+X_train_106 = train_model_106 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_106 = train_model_106$mean_travel_time
+X_test_106 = test_model %>% filter(link_id %in% c(106)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_106, label = y_train_106, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [64]	train-MAPE:0.363589+0.003528	test-MAPE:0.391408+0.029460 
+cv_model = xgb.cv(data = X_train_106, label = y_train_106, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.005, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [129]	train-MAPE:0.363819+0.004109	test-MAPE:0.392383+0.036376 
+
+
+model = xgboost(data = X_train_106, label = y_train_106, nrounds = 129, max_depth = 5, subsample = 1, eta = 0.005, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_106), model = model)
+
+avg_travel_time_106 = predict(model, X_test_106, missing = NA) # assign
+
+y_test_106 = cbind(X_test_106, avg_travel_time_106) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_106)
+y_test_106 = test_model %>% ungroup %>% left_join(y_test_106, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_106) 
+```
+## link 107
+```{r}
+train_model_107 = train_model %>% filter(link_id %in% c(107))
+X_train_107 = train_model_107 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_107 = train_model_107$mean_travel_time
+X_test_107 = test_model %>% filter(link_id %in% c(107)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_107, label = y_train_107, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [177]	train-MAPE:0.221805+0.003387	test-MAPE:0.240785+0.013662 
+
+model = xgboost(data = X_train_107, label = y_train_107, nrounds = 177, max_depth = 5, subsample = 1, eta = 0.01,
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_107), model = model)
+
+avg_travel_time_107 = predict(model, X_test_107, missing = NA) # assign
+
+y_test_107 = cbind(X_test_107, avg_travel_time_107) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_107)
+y_test_107 = test_model %>% ungroup %>% left_join(y_test_107, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_107) 
+```
+## link 108
+```{r}
+train_model_108 = train_model %>% filter(link_id %in% c(108))
+X_train_108 = train_model_108 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_108 = train_model_108$mean_travel_time
+X_test_108 = test_model %>% filter(link_id %in% c(108)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_108, label = y_train_108, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [192]	train-MAPE:0.210856+0.001699	test-MAPE:0.241589+0.017001 
+
+model = xgboost(data = X_train_108, label = y_train_108, nrounds = 189, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_108), model = model)
+
+avg_travel_time_108 = predict(model, X_test_108, missing = NA) # assign
+
+y_test_108 = cbind(X_test_108, avg_travel_time_108) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_108)
+y_test_108 = test_model %>% ungroup %>% left_join(y_test_108, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_108) 
+```
+## link 109
+```{r}
+train_model_109 = train_model %>% filter(link_id %in% c(109))
+X_train_109 = train_model_109 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_109 = train_model_109$mean_travel_time
+X_test_109 = test_model %>% filter(link_id %in% c(109)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_109, label = y_train_109, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [234]	train-MAPE:0.159994+0.001528	test-MAPE:0.183826+0.008100 
+
+model = xgboost(data = X_train_109, label = y_train_109, nrounds = 234, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_109), model = model)
+
+avg_travel_time_109 = predict(model, X_test_109, missing = NA) # assign
+
+y_test_109 = cbind(X_test_109, avg_travel_time_109) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_109)
+y_test_109 = test_model %>% ungroup %>% left_join(y_test_109, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_109) 
+```
+## link 110
+```{r}
+train_model_110 = train_model %>% filter(link_id %in% c(110))
+X_train_110 = train_model_110 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_110 = train_model_110$mean_travel_time
+X_test_110 = test_model %>% filter(link_id %in% c(110)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_110, label = y_train_110, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [236]	train-MAPE:0.169956+0.000629	test-MAPE:0.177303+0.004850 
+
+model = xgboost(data = X_train_110, label = y_train_110, nrounds = 236, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_110), model = model)
+
+avg_travel_time_110 = predict(model, X_test_110, missing = NA) # assign
+
+y_test_110 = cbind(X_test_110, avg_travel_time_110) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_110)
+y_test_110 = test_model %>% ungroup %>% left_join(y_test_110, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_110) 
+```
+## link 111 : 0.37
+```{r}
+train_model_111 = train_model %>% filter(link_id %in% c(111))
+X_train_111 = train_model_111 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_111 = train_model_111$mean_travel_time
+X_test_111 = test_model %>% filter(link_id %in% c(111)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_111, label = y_train_111, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [130]	train-MAPE:0.346788+0.001864	test-MAPE:0.370330+0.010317 
+
+model = xgboost(data = X_train_111, label = y_train_111, nrounds = 130, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_111), model = model)
+
+avg_travel_time_111 = predict(model, X_test_111, missing = NA) # assign
+
+y_test_111 = cbind(X_test_111, avg_travel_time_111) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_111)
+y_test_111 = test_model %>% ungroup %>% left_join(y_test_111, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_111) 
+```
+## link 112 : 0.34
+```{r}
+train_model_112 = train_model %>% filter(link_id %in% c(112))
+X_train_112 = train_model_112 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_112 = train_model_112$mean_travel_time
+X_test_112 = test_model %>% filter(link_id %in% c(112)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_112, label = y_train_112, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [128]	train-MAPE:0.312190+0.003010	test-MAPE:0.340445+0.006665 
+
+model = xgboost(data = X_train_112, label = y_train_112, nrounds = 128, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_112), model = model)
+
+avg_travel_time_112 = predict(model, X_test_112, missing = NA) # assign
+
+y_test_112 = cbind(X_test_112, avg_travel_time_112) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_112)
+y_test_112 = test_model %>% ungroup %>% left_join(y_test_112, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_112) 
+```
+## link 113 : 0.4
+```{r}
+train_model_113 = train_model %>% filter(link_id %in% c(113))
+X_train_113 = train_model_113 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_113 = train_model_113$mean_travel_time
+X_test_113 = test_model %>% filter(link_id %in% c(113)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_113, label = y_train_113, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [124]	train-MAPE:0.376645+0.001184	test-MAPE:0.399799+0.008671
+
+model = xgboost(data = X_train_113, label = y_train_113, nrounds = 124, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_113), model = model)
+
+avg_travel_time_113 = predict(model, X_test_113, missing = NA) # assign
+
+y_test_113 = cbind(X_test_113, avg_travel_time_113) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_113)
+y_test_113 = test_model %>% ungroup %>% left_join(y_test_113, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_113) 
+```
+## link 114
+```{r}
+train_model_114 = train_model %>% filter(link_id %in% c(114))
+X_train_114 = train_model_114 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_114 = train_model_114$mean_travel_time
+X_test_114 = test_model %>% filter(link_id %in% c(114)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_114, label = y_train_114, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [180]	train-MAPE:0.218039+0.003319	test-MAPE:0.250288+0.020117 
+
+model = xgboost(data = X_train_114, label = y_train_114, nrounds = 180, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_114), model = model)
+
+avg_travel_time_114 = predict(model, X_test_114, missing = NA) # assign
+
+y_test_114 = cbind(X_test_114, avg_travel_time_114) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_114)
+y_test_114 = test_model %>% ungroup %>% left_join(y_test_114, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_114) 
+```
+## link 115
+```{r}
+train_model_115 = train_model %>% filter(link_id %in% c(115))
+X_train_115 = train_model_115 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_115 = train_model_115$mean_travel_time
+X_test_115 = test_model %>% filter(link_id %in% c(115)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_115, label = y_train_115, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [207]	train-MAPE:0.188674+0.002109	test-MAPE:0.204047+0.005521
+
+model = xgboost(data = X_train_115, label = y_train_115, nrounds = 207, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_115), model = model)
+
+avg_travel_time_115 = predict(model, X_test_115, missing = NA) # assign
+
+y_test_115 = cbind(X_test_115, avg_travel_time_115) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_115)
+y_test_115 = test_model %>% ungroup %>% left_join(y_test_115, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_115) 
+```
+## link 116
+```{r}
+train_model_116 = train_model %>% filter(link_id %in% c(116))
+X_train_116 = train_model_116 %>%
+    select(length, width, precipitation, rel_humidity,
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_116 = train_model_116$mean_travel_time
+X_test_116 = test_model %>% filter(link_id %in% c(116)) %>% 
+  select(length, width, precipitation, history_average, rel_humidity,
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_116, label = y_train_116, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [208]	train-MAPE:0.190643+0.003063	test-MAPE:0.208865+0.016144
+# [201]	train-MAPE:0.192274+0.002995	test-MAPE:0.236444+0.045367 without relative humidity
+
+model = xgboost(data = X_train_116, label = y_train_116, nrounds = 208, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_116), model = model)
+
+avg_travel_time_116 = predict(model, X_test_116, missing = NA) # assign
+
+y_test_116 = cbind(X_test_116, avg_travel_time_116) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_116)
+y_test_116 = test_model %>% ungroup %>% left_join(y_test_116, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_116) 
+```
+## link 117
+```{r}
+train_model_117 = train_model %>% filter(link_id %in% c(117))
+X_train_117 = train_model_117 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_117 = train_model_117$mean_travel_time
+X_test_117 = test_model %>% filter(link_id %in% c(117)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_117, label = y_train_117, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [154]	train-MAPE:0.290813+0.003541	test-MAPE:0.311839+0.014726
+
+model = xgboost(data = X_train_117, label = y_train_117, nrounds = 154, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_117), model = model)
+
+avg_travel_time_117 = predict(model, X_test_117, missing = NA) # assign
+
+y_test_117 = cbind(X_test_117, avg_travel_time_117) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_117)
+y_test_117 = test_model %>% ungroup %>% left_join(y_test_117, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_117) 
+```
+## link 118
+```{r}
+train_model_118 = train_model %>% filter(link_id %in% c(118))
+X_train_118 = train_model_118 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_118 = train_model_118$mean_travel_time
+X_test_118 = test_model %>% filter(link_id %in% c(118)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_118, label = y_train_118, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [162]	train-MAPE:0.260611+0.001955	test-MAPE:0.273921+0.009127 
+
+model = xgboost(data = X_train_118, label = y_train_118, nrounds = 162, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_118), model = model)
+
+avg_travel_time_118 = predict(model, X_test_118, missing = NA) # assign
+
+y_test_118 = cbind(X_test_118, avg_travel_time_118) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_118)
+y_test_118 = test_model %>% ungroup %>% left_join(y_test_118, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_118) 
+```
+## link 119
+```{r}
+train_model_119 = train_model %>% filter(link_id %in% c(119))
+X_train_119 = train_model_119 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_119 = train_model_119$mean_travel_time
+X_test_119 = test_model %>% filter(link_id %in% c(119)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_119, label = y_train_119, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [90]	train-MAPE:0.233034+0.002104	test-MAPE:0.258624+0.025246 
+
+model = xgboost(data = X_train_119, label = y_train_119, nrounds = 90, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE) 
+xgb.importance(feature_names = colnames(X_train_119), model = model)
+
+avg_travel_time_119 = predict(model, X_test_119, missing = NA) # assign
+
+y_test_119 = cbind(X_test_119, avg_travel_time_119) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_119)
+y_test_119 = test_model %>% ungroup %>% left_join(y_test_119, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_119) 
+```
+## link 120
+```{r}
+train_model_120 = train_model %>% filter(link_id %in% c(120))
+X_train_120 = train_model_120 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_120 = train_model_120$mean_travel_time
+X_test_120 = test_model %>% filter(link_id %in% c(120)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_120, label = y_train_120, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [55]	train-MAPE:0.262236+0.003502	test-MAPE:0.314313+0.052010
+cv_model = xgb.cv(data = X_train_120, label = y_train_120, nrounds = 650, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.001, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [640]	train-MAPE:0.253344+0.001877	test-MAPE:0.282409+0.026234 
+
+model = xgboost(data = X_train_120, label = y_train_120, nrounds = 640, max_depth = 5, subsample = 1, eta = 0.001, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_120), model = model)
+
+avg_travel_time_120 = predict(model, X_test_120, missing = NA) # assign
+
+y_test_120 = cbind(X_test_120, avg_travel_time_120) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_120)
+y_test_120 = test_model %>% ungroup %>% left_join(y_test_120, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_120) 
+```
+## link 121 : 0.35
+```{r}
+train_model_121 = train_model %>% filter(link_id %in% c(121))
+X_train_121 = train_model_121 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_121 = train_model_121$mean_travel_time
+X_test_121 = test_model %>% filter(link_id %in% c(121)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_121, label = y_train_121, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [117]	train-MAPE:0.326043+0.002984	test-MAPE:0.352093+0.030089 
+
+cv_model = xgb.cv(data = X_train_121, label = y_train_121, nrounds = 1500, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.001, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [1163]	train-MAPE:0.326276+0.002937	test-MAPE:0.350106+0.016607
+
+model = xgboost(data = X_train_121, label = y_train_121, nrounds = 117, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_121), model = model)
+
+avg_travel_time_121 = predict(model, X_test_121, missing = NA) # assign
+
+y_test_121 = cbind(X_test_121, avg_travel_time_121) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_121)
+y_test_121 = test_model %>% ungroup %>% left_join(y_test_121, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_121) 
+```
+## link 122
+```{r}
+train_model_122 = train_model %>% filter(link_id %in% c(122))
+X_train_122 = train_model_122 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_122 = train_model_122$mean_travel_time
+X_test_122 = test_model %>% filter(link_id %in% c(122)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_122, label = y_train_122, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [189]	train-MAPE:0.230531+0.002019	test-MAPE:0.254788+0.014158 
+
+model = xgboost(data = X_train_122, label = y_train_122, nrounds = 189, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_122), model = model)
+
+avg_travel_time_122 = predict(model, X_test_122, missing = NA) # assign
+
+y_test_122 = cbind(X_test_122, avg_travel_time_122) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_122)
+y_test_122 = test_model %>% ungroup %>% left_join(y_test_122, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_122) 
+```
+## link 123
+```{r}
+train_model_123 = train_model %>% filter(link_id %in% c(123))
+X_train_123 = train_model_123 %>%
+    select(length, width, rel_humidity, precipitation,  
+           mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+           day_time_group, weekday,
+           history_average) %>% as.matrix()
+y_train_123 = train_model_123$mean_travel_time
+X_test_123 = test_model %>% filter(link_id %in% c(123)) %>% 
+  select(length, width, rel_humidity, precipitation, history_average, 
+         mtt_1, mtt_2, mtt_3, mtt_4, mtt_5, mtt_6,
+         link_id, day_time_group, weekday) %>% as.matrix()
+
+cv_model = xgb.cv(data = X_train_123, label = y_train_123, nrounds = 300, nfold = 6, max_depth = 5, subsample = 1,
+                  eta = 0.01, gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear",
+                  eval_metric = MAPE) # [225]	train-MAPE:0.171002+0.001919	test-MAPE:0.189772+0.011821
+
+model = xgboost(data = X_train_123, label = y_train_123, nrounds = 225, max_depth = 5, subsample = 1, eta = 0.01, 
+               gamma = 0, colsample_bytree = 1, min_child_weight = 1, missing = NA, objective = "reg:linear", 
+               eval_metric = MAPE)
+xgb.importance(feature_names = colnames(X_train_123), model = model)
+
+avg_travel_time_123 = predict(model, X_test_123, missing = NA) # assign
+
+y_test_123 = cbind(X_test_123, avg_travel_time_123) %>% as.data.table() %>% #assign
+  select(link_id, weekday, day_time_group, avg_travel_time_123)
+y_test_123 = test_model %>% ungroup %>% left_join(y_test_123, by = c("link_id", "weekday", "day_time_group")) %>% 
+  distinct(intersection_id, tollgate_id, link_id, time_window, weekday, day_time_group, avg_travel_time_123) 
+```
+
+# final output part : join y_test from all different links
+```{r}
+result = 
+  y_test_100 %>% 
+  left_join(y_test_101, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_102, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_103, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_104, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_105, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_106, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_107, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_108, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_109, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_110, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_111, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_112, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_113, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_114, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_115, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_116, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_117, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_118, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_119, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_120, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_121, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_122, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  left_join(y_test_123, by = c("intersection_id", "tollgate_id", "link_id", "time_window", "weekday", "day_time_group")) %>%
+  mutate(avg_travel_time = mapply(sum, 
+                                  avg_travel_time_100, avg_travel_time_101, avg_travel_time_102, avg_travel_time_103,
+                                  avg_travel_time_104, avg_travel_time_105, avg_travel_time_106, avg_travel_time_107,
+                                  avg_travel_time_108, avg_travel_time_109, avg_travel_time_110, avg_travel_time_111,
+                                  avg_travel_time_112, avg_travel_time_113, avg_travel_time_114, avg_travel_time_115,
+                                  avg_travel_time_116, avg_travel_time_117, avg_travel_time_118, avg_travel_time_119,
+                                  avg_travel_time_120, avg_travel_time_121, avg_travel_time_122, avg_travel_time_123,
+                                  na.rm = TRUE)) %>%
+  select(intersection_id, tollgate_id, time_window, link_id, avg_travel_time) %>%
+  group_by(intersection_id, tollgate_id, time_window) %>%
+  summarise(avg_travel_time = sum(avg_travel_time))
+
+fwrite(result, file = "submission_xgb_sglink1.csv", row.names = FALSE)  
+```
