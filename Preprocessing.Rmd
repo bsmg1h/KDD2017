@@ -6,17 +6,18 @@ output: html_document
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(dtplyr)
+library(data.table)
 set.seed(1)
 setwd("/Users/LL/Documents/HKUST/KDD/R code")
 
 # train data
-train_trajectories <- read.csv("trajectories(table 5)_training.csv")
-train_weather <- read.csv("weather (table 7)_training_update.csv")
-# there are 8 times 999017 unusual values : that needs to be replaced
+train_trajectories = read.csv("trajectories(table 5)_training.csv")
+train_weather = read.csv("weather (table 7)_training_update.csv") # there are 8 times 999017 unusual values : that needs to be replaced
 
 # test data
 test_trajectories = read.csv("trajectories(table 5)_test1.csv")
-test_weather <- read.csv("weather (table 7)_test1.csv")
+test_weather = read.csv("weather (table 7)_test1.csv")
 ```
 # Normalizing datas from table 3
 ```{r}
@@ -24,6 +25,7 @@ table3 <- read.csv("links (table 3).csv")
 width_max = max(table3$width)
 length_max = max(table3$length)
 table3 = table3 %>% mutate(width = width/width_max, length = length/length_max)
+rm(width_max, length_max)
 ```
 
 ```{r}
@@ -325,15 +327,8 @@ convert_weekday <- function(char_weekday) {
 ```
 
 ```{r}
-# links = fread("links_with_weather.csv")
-# history_average_by_all = links %>%
-#   group_by(link_id, weekday, day_time_group) %>%
-#   summarise(history_average = mean(link_travel_time))
-```
-
-```{r}
 join_link_information <- function(links, link_information) {
-  link_information = link_information %>% select(link_id, length, width)
+  link_information = link_information %>% select(link_id, length, width, in_top, out_top)
   links = left_join(links, link_information, by = c("link_id" = "link_id"))
   return(links)
 }
@@ -341,7 +336,9 @@ join_link_information <- function(links, link_information) {
 join_weather <- function(links, weather) {
   links = mutate(links, weather_group = 3*(start_hour%/%3))
   weather = mutate(weather, date = as.Date(date))
-  links = left_join(links, weather, by = c("start_date" = "date", "weather_group" = "hour"))
+  weather = mutate(weather, start_date = date, weather_group = as.numeric(hour)) %>% select(-date, -hour)
+  # links = left_join(links, weather, by = c("start_date" = "date", "weather_group" = "hour"))
+  links = left_join(links, weather, by = c("start_date", "weather_group"))
   links = select(links, -weather_group)
   return(links)
 }
@@ -353,6 +350,7 @@ join_weather <- function(links, weather) {
 # 'trajectories(table 5)_test1.csv' x 'weather (table 7)_test1.csv' x 'links (table 3).csv'
 # test_links = preprocess(test_trajectories) %>%
 #   join_weather(test_weather) %>% join_link_information(table3)
+
 train_links = rbind(preprocess(train_trajectories) %>% join_weather(train_weather) %>% join_link_information(table3),
                     preprocess(test_trajectories) %>% join_weather(test_weather) %>% join_link_information(table3))
 
@@ -389,7 +387,9 @@ train_model = train_model %>% mutate(y = history_average - mean_travel_time)
 
 # add the difference from mean travel time data of previous 2 hours (= 6 day_time_group) for the following 6 d_t_g
 # which are : "y_1", "y_2", "y_3", "y_4", "y_5", "y_6"
-
+```
+# add information about previous day_time_group, including in and out links information
+```{r}
 mutate_date <- function(start_date, day_time_group) {
   if (day_time_group >= 7) {
     return(start_date)
@@ -415,20 +415,30 @@ mean_travel_time_data = train_model %>% ungroup %>%
   select(-mean_travel_time)
 
 add_previous <- function(train_model, y_data, mean_travel_time_data) {
+  # can also be used on test_model
   train_model %>% 
+    # general processing
     mutate(previous_date = as.Date(mapply(mutate_date, start_date, day_time_group), origin = "1970-01-01"),
-           previous_dtg_1 = mapply(mutate_y, start_date, day_time_group),
+           # lag dtg
            previous_dtg_2 = mapply(mutate_y, start_date, day_time_group)-1,
+           previous_dtg_1 = mapply(mutate_y, start_date, day_time_group),
            previous_dtg_3 = mapply(mutate_y, start_date, day_time_group)-2,
            previous_dtg_4 = mapply(mutate_y, start_date, day_time_group)-3,
            previous_dtg_5 = mapply(mutate_y, start_date, day_time_group)-4,
            previous_dtg_6 = mapply(mutate_y, start_date, day_time_group)-5) %>%
+    # for in and out links
+    separate(in_top, into = c("in_link_1", "in_link_2"), sep = ",") %>%
+    separate(out_top, into = c("out_link_1", "out_link_2"), sep = ",") %>%
+    mutate(in_link_1 = as.numeric(in_link_1), in_link_2 = as.numeric(in_link_2),
+           out_link_1 = as.numeric(out_link_1), out_link_2 = as.numeric(out_link_2)) %>%
+    # lag y of the link
     left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
     left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
     left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
     left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
     left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
     left_join(y_data, by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
     left_join(mean_travel_time_data, 
               by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
     left_join(mean_travel_time_data, 
@@ -440,17 +450,253 @@ add_previous <- function(train_model, y_data, mean_travel_time_data) {
     left_join(mean_travel_time_data, 
               by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
     left_join(mean_travel_time_data, 
-              by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
-    select(-previous_dtg_1, -previous_dtg_2, -previous_dtg_3, -previous_dtg_4, -previous_dtg_5, -previous_dtg_6) %>%
-    select(-previous_date) -> result
+              by = c("link_id" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
   colnames(result)[(ncol(result)-11):ncol(result)] <- c("y_1", "y_2", "y_3", "y_4", "y_5", "y_6",
                                                         "mtt_1", "mtt_2", "mtt_3", "mtt_4", "mtt_5", "mtt_6")
+    # in link 1
+  result %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("in_link_1_y_1", "in_link_1_y_2", "in_link_1_y_3", 
+                                                        "in_link_1_y_4", "in_link_1_y_5", "in_link_1_y_6",
+                                                        "in_link_1_mtt_1", "in_link_1_mtt_2", "in_link_1_mtt_3",
+                                                        "in_link_1_mtt_4", "in_link_1_mtt_5", "in_link_1_mtt_6")
+  # in link 2
+  result %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("in_link_2_y_1", "in_link_2_y_2", "in_link_2_y_3", 
+                                                        "in_link_2_y_4", "in_link_2_y_5", "in_link_2_y_6",
+                                                        "in_link_2_mtt_1", "in_link_2_mtt_2", "in_link_2_mtt_3",
+                                                        "in_link_2_mtt_4", "in_link_2_mtt_5", "in_link_2_mtt_6")
+  # out link 1
+  result %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("out_link_1_y_1", "out_link_1_y_2", "out_link_1_y_3", 
+                                                        "out_link_1_y_4", "out_link_1_y_5", "out_link_1_y_6",
+                                                        "out_link_1_mtt_1", "out_link_1_mtt_2", "out_link_1_mtt_3",
+                                                        "out_link_1_mtt_4", "out_link_1_mtt_5", "out_link_1_mtt_6")
+  # out link 2
+  result %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("out_link_2_y_1", "out_link_2_y_2", "out_link_2_y_3", 
+                                                        "out_link_2_y_4", "out_link_2_y_5", "out_link_2_y_6",
+                                                        "out_link_2_mtt_1", "out_link_2_mtt_2", "out_link_2_mtt_3",
+                                                        "out_link_2_mtt_4", "out_link_2_mtt_5", "out_link_2_mtt_6")
+  # delete unused columns
+  result = result %>% 
+      select(-previous_dtg_1, -previous_dtg_2, -previous_dtg_3, -previous_dtg_4, -previous_dtg_5, -previous_dtg_6) %>%
+      select(-previous_date) 
   return(result)
 }
+
+add_in_info <- function(train_model, y_data, mean_travel_time_data) {
+  train_model %>%
+    separate(in_top, into = c("in_link_1", "in_link_2"), sep = ",") %>%
+    separate(out_top, into = c("out_link_1", "out_link_2"), sep = ",") %>%
+    mutate(in_link_1 = as.numeric(in_link_1), in_link_2 = as.numeric(in_link_2),
+           out_link_1 = as.numeric(out_link_1), out_link_2 = as.numeric(out_link_2)) %>%
+    # to be deleted
+    mutate(previous_date = as.Date(mapply(mutate_date, start_date, day_time_group), origin = "1970-01-01"),
+           # lag dtg
+           previous_dtg_1 = mapply(mutate_y, start_date, day_time_group),
+           previous_dtg_2 = mapply(mutate_y, start_date, day_time_group)-1,
+           previous_dtg_3 = mapply(mutate_y, start_date, day_time_group)-2,
+           previous_dtg_4 = mapply(mutate_y, start_date, day_time_group)-3,
+           previous_dtg_5 = mapply(mutate_y, start_date, day_time_group)-4,
+           previous_dtg_6 = mapply(mutate_y, start_date, day_time_group)-5) %>%
+    # in link 1
+  result %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("in_link_1_y_1", "in_link_1_y_2", "in_link_1_y_3", 
+                                                        "in_link_1_y_4", "in_link_1_y_5", "in_link_1_y_6",
+                                                        "in_link_1_mtt_1", "in_link_1_mtt_2", "in_link_1_mtt_3",
+                                                        "in_link_1_mtt_4", "in_link_1_mtt_5", "in_link_1_mtt_6")
+  # in link 2
+  result %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("in_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("in_link_2_y_1", "in_link_2_y_2", "in_link_2_y_3", 
+                                                        "in_link_2_y_4", "in_link_2_y_5", "in_link_2_y_6",
+                                                        "in_link_2_mtt_1", "in_link_2_mtt_2", "in_link_2_mtt_3",
+                                                        "in_link_2_mtt_4", "in_link_2_mtt_5", "in_link_2_mtt_6")
+  
+  # out link 1
+  result %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_1" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) -> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("out_link_1_y_1", "out_link_1_y_2", "out_link_1_y_3", 
+                                                        "out_link_1_y_4", "out_link_1_y_5", "out_link_1_y_6",
+                                                        "out_link_1_mtt_1", "out_link_1_mtt_2", "out_link_1_mtt_3",
+                                                        "out_link_1_mtt_4", "out_link_1_mtt_5", "out_link_1_mtt_6")
+  # out link 2
+  result %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(y_data, by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    # lag mean_travel_time of the link
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_1" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_2" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_3" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_4" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_5" = "day_time_group")) %>%
+    left_join(mean_travel_time_data, 
+              by = c("out_link_2" = "link_id", "previous_date" = "start_date", "previous_dtg_6" = "day_time_group")) %>%
+    select(-previous_dtg_1, -previous_dtg_2, -previous_dtg_3, -previous_dtg_4, -previous_dtg_5, -previous_dtg_6) %>%
+    select(-previous_date)-> result
+  colnames(result)[(ncol(result)-11):ncol(result)] <- c("out_link_2_y_1", "out_link_2_y_2", "out_link_2_y_3", 
+                                                        "out_link_2_y_4", "out_link_2_y_5", "out_link_2_y_6",
+                                                        "out_link_2_mtt_1", "out_link_2_mtt_2", "out_link_2_mtt_3",
+                                                        "out_link_2_mtt_4", "out_link_2_mtt_5", "out_link_2_mtt_6")
+}  
 train_model = add_previous(train_model, y_data, mean_travel_time_data)
 # for the test days "y_1", "y_2", "y_3", "y_4", "y_5", "y_6", "mtt_1", "mtt_2", "mtt_3", "mtt_4", "mtt_5", "mtt_6" 
 # are incomplete
 # for train dates start on 2016-07-19 ends on 2016-10-17, test dates are from 2016-10-18 ends on 2016-10-24
+```
+
+# Processing of volume data
+```{r}
+train_volume = fread("volume(table 6)_training.csv")
+train_volume %>% filter(direction == 0) %>% 
+  select(-vehicle_type, -direction) %>%
+  separate(time, into = c("date", "time"), sep = " ") %>%
+  separate(time, into = c("hour", "minute", "second"), sep = ":") %>%
+  mutate(date = as.Date(date), hour = as.numeric(hour), minute = as.numeric(minute)) %>% 
+  select(-second) %>%
+  group_by(tollgate_id, date, hour) %>%
+  count()
+
 ```
 # Construct test_model and X_test
 ```{r}
@@ -537,9 +783,9 @@ test_model = add_previous(test_model, y_data, mean_travel_time_data)
 # Ouput
 ```{r}
 # output files
-write.csv(train_links, file = "links_with_weather.csv", row.names = FALSE)
-# write.csv(test_links, file = "test_links_with_weather.csv", row.names = FALSE)
-write.csv(train_model, file = "train_model.csv", row.names = FALSE)
-# write.csv(test_model, file = "test_model.csv", row.names = FALSE)
-write.csv(test_model, file = "test_model.csv", row.names = FALSE)
+fwrite(train_links, file = "links_with_weather.csv", row.names = FALSE)
+# fwrite(test_links, file = "test_links_with_weather.csv", row.names = FALSE)
+fwrite(train_model, file = "train_model.csv", row.names = FALSE)
+# fwrite(test_model, file = "test_model.csv", row.names = FALSE)
+fwrite(test_model, file = "test_model.csv", row.names = FALSE)
 ```
